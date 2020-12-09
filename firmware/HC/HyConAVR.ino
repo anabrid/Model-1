@@ -1,10 +1,39 @@
 /*
-    Simple hybrid interface to the Analogparadigm Model-1 analog computer. All timing related issues are done with a polling state machine instead
-   of a more or less elaborate interrupt scheme (which was implemented first but yielded problems with "lost" OP-cycles etc. under certain (nasty)
-   conditions). Accordingly, one should be aware that serial line input/output may cause some clock-skew in this implementation but this should not
+    Simple hybrid interface to the Analogparadigm Model-1 analog computer.
+*/
+
+/*
+ ANABRID_BEGIN_LICENSE:GPL
+ Commercial License Usage
+ Licensees holding valid commercial anabrid licenses may use this file in
+ accordance with the commercial license agreement provided with the
+ Software or, alternatively, in accordance with the terms contained in
+ a written agreement between you and Anabrid GmbH. For licensing terms
+ and conditions see https://www.anabrid.com/licensing. For further
+ information use the contact form at https://www.anabrid.com/contact.
+ 
+ GNU General Public License Usage
+ Alternatively, this file may be used under the terms of the GNU 
+ General Public License version 3 as published by the Free Software
+ Foundation and appearing in the file LICENSE.GPL3 included in the
+ packaging of this file. Please review the following information to
+ ensure the GNU General Public License version 3 requirements
+ will be met: https://www.gnu.org/licenses/gpl-3.0.html.
+ ANABRID_END_LICENSE
+*/
+
+/*
+   All timing related issues are done with a polling state machine instead
+   of a more or less elaborate interrupt scheme (which was implemented first
+   but yielded problems with "lost" OP-cycles etc. under certain (nasty)
+   conditions). Accordingly, one should be aware that serial line input/output
+   may cause some clock-skew in this implementation but this should not
    be a problem as most output consists of only a few bytes.
-    The same holds true for the two external halt conditions (overflow and the EXT-HALT-input).
-    Be careful not to issue c/C (set OP/IC time) or d/D (switch digital output on or off) commands during a single or repetitive run as these commands
+
+   The same holds true for the two external halt conditions (overflow
+   and the EXT-HALT-input).
+   Be careful not to issue c/C (set OP/IC time) or d/D (switch digital
+   output on or off) commands during a single or repetitive run as these commands
    use blocking IO to wait for their respective argument!
 
    04-AUG-2016  B. Ulmann   Begin implementation
