@@ -127,6 +127,7 @@
 #define MAX_DPT_MODULES 16                      // A system may accomodate (arbitrarily chosen) up to 16 modules containing digital potentiometers
 #define INPUT_BUFF_LEN  MAX_GROUP_SIZE * 5 + 4  // Length of the input buffer for all numeric values
 #define READ_DELAY      4                       // Delay for readout of module ids (in microseconds)
+#define PS_READ_DELAY   1000                    // A long delay prior to reading the machine units to make sure everything is a stable as can be
 #define MAX_SAMPLES     1152                    // Number of 16 bit values usable for logging purposes
 #define CONTINGENCY_SAMPLES 128                 // This is subtracted from MAX_SAMPLES to avoid problems due to small timer inaccuracies
 #define MIN_SAMPLE_INT  50                      // Minimum duration of a sample interval in microseconds
@@ -179,6 +180,8 @@ volatile int16_t no_of_samples = 0,                 // Index of last sample, vol
                  samples[MAX_SAMPLES],              // Array for data logging
                  state = STATE_NORMAL;              // The state machine is setup for external control
 struct DPT_MODULE dpt_modules[MAX_DPT_MODULES];     // Each module containins DPTs is represented by one entry of this array
+SPISettings adc_spi(20000000, MSBFIRST, SPI_MODE3); // Set SPI-mode and speed for accessing the ADC
+SPISettings dpt_spi(8000000, MSBFIRST, SPI_MODE1);
 
 //***************************************************************************************
 //  setup() is called once during startup of the HC module and initializes the various
@@ -267,24 +270,20 @@ void setup() { // Setup interfaces
 
   init_adc();                                     // Send Soft Span configuration word, this is absolutely necessary for the ADC to work correctly!
 
-  delayMicroseconds(1000);                        // Since these two values are of utmost importance, make sure everything is settled
-  machine_unit_pos = read_adc(M_UNIT_POS_ADDR_OLD);
+  machine_unit_pos = read_adc(M_UNIT_POS_ADDR_OLD, PS_READ_DELAY);
   if (module_id == 0) {                           // module_id is globale, 0 is the id of the PS card
 #ifdef DEBUG
     Serial.print("PS card found at old address\n");
 #endif
-    delayMicroseconds(1000);                      // If the PS card is at this address, it is an old machine without the address modification
-    machine_unit_neg = read_adc(M_UNIT_NEG_ADDR_OLD);
+    machine_unit_neg = read_adc(M_UNIT_NEG_ADDR_OLD, PS_READ_DELAY);
   } else {                                        // No PS card at the old address, it must be a new machine
 #ifdef DEBUG
     Serial.print("No PS card found at old address - module_id = " + String(module_id) + "\n");
 #endif
-    delayMicroseconds(1000);                      // Since these two values are of utmost importance, make sure everything is settled
-    machine_unit_pos = read_adc(M_UNIT_POS_ADDR);
+    machine_unit_pos = read_adc(M_UNIT_POS_ADDR, PS_READ_DELAY);
     if (module_id != 0)
       Serial.print("PANIC: PS card neither found at old nor at new address - module_id = " + String(module_id) + "\n");
-    delayMicroseconds(1000);                      // Since these two values are of utmost importance, make sure everything is settled
-    machine_unit_neg = read_adc(M_UNIT_NEG_ADDR);
+    machine_unit_neg = read_adc(M_UNIT_NEG_ADDR, PS_READ_DELAY);
   }
 #ifdef DEBUG
   Serial.print("+ = " + String(machine_unit_pos) + ", - = " + String(machine_unit_neg) + "\n");
@@ -340,7 +339,7 @@ int16_t init_adc() {                        // Initiate a conversion and readout
     PORTB |= B00000010;                     // ...and SCLK = 1
   }
   
-  read_adc(M_UNIT_POS_ADDR);                // Perform one dummy read - this is necessary only for some (?!) of the LTC2357 chips...
+  read_adc(M_UNIT_POS_ADDR, READ_DELAY);    // Perform one dummy read - this is necessary only for some (?!) of the LTC2357 chips...
 }
 
 //***************************************************************************************
@@ -353,21 +352,20 @@ int16_t init_adc() {                        // Initiate a conversion and readout
 // the element addressed on the data bus. Only the lower 7 bits of the module ID read
 // are returned.
 //***************************************************************************************
-int16_t read_adc(unsigned int address) {
+int16_t read_adc(unsigned int address, unsigned int delay) {
   uint8_t rx0, rx1, rx2;
-  SPISettings SPI_ADC(20000000, MSBFIRST, SPI_MODE3); // Set SPI-mode and speed
 
   write_address(address);                             // Address the requested computing element
-  RW_PORT = B00001010;                                // Activate /READ
-  delayMicroseconds(READ_DELAY);
+  assert_read();
+  delayMicroseconds(delay);
   module_id = DBUS_IN & 0x7f;                         // Remember the ID of the module just read out - this is ugly since module_id is global... *sigh*
   RW_PORT |= B00010000;                               // Toggle CNV: First, set CNV = 1, this is independent from /CS
   RW_PORT &= B11101111;                               // Reset CNV - these two successive port manipulations yield a high-time of 120 ns on the Mega2650-CORE
 
   RW_PORT &= B11111101;                               // Set /CS to low, thus enabling the ADC's serial line interface
-  PORTG |= B00000100;                                 // Deactivate bus line: /READ = 1
+  deassert_rw();
 
-  SPI.beginTransaction(SPI_ADC);
+  SPI.beginTransaction(adc_spi);
   rx0 = SPI.transfer(0);                              // Read three single bytes (only the first two contain the actual data,
   rx1 = SPI.transfer(0x70);                           // the third one contains the Soft Span word which is checked
   rx2 = SPI.transfer(0);                              // just to be sure everything worked OK).
@@ -440,12 +438,12 @@ void data2potentiometers(int mode, unsigned int address, unsigned int data[], un
   SPI.setClockDivider(SPI_CLOCK_DIV2);  // done before any access to make sure that we have the right settings
   SPI.setDataMode(SPI_MODE1);
 
-  SYNC_PORT &= B10111111; // Initiate transfer and transfer data to the daisy-chained potentiometers, data for the first one must come last!
+  SYNC_PORT &= B10111111;               // Initiate transfer and transfer data to the daisy-chained potentiometers, data for the first one must come last!
   for (i = number_of_pt - 1; i >= 0; i--) {
     high = (data[i] >> 8) & 0xff;
     low  = data[i] & 0xff;
 
-    if (mode != RAW) {    // Transfer wiper data and update wiper position
+    if (mode != RAW) {                  // Transfer wiper data and update wiper position
       high &= 0x3;
       low  &= 0xff;
       high |= 0x4;
@@ -455,9 +453,9 @@ void data2potentiometers(int mode, unsigned int address, unsigned int data[], un
     SPI.transfer(low);
   }
 
-  SYNC_PORT |= B01000000; // Let the potentiometers know that the data upload is finished
+  SYNC_PORT |= B01000000;               // Let the potentiometers know that the data upload is finished
   SPI.end();
-  deassert_rw();          // Deassert /WRITE
+  deassert_rw();                        // Deassert /WRITE
 }
 
 //***************************************************************************************
@@ -474,7 +472,7 @@ void data2potentiometers(int mode, unsigned int address, unsigned int data[], un
   SPI.setBitOrder(MSBFIRST);            // This is pretty specific to the digital potentiometers used and should be
   SPI.setClockDivider(SPI_CLOCK_DIV2);  // done before any access to make sure that we have the right settings
   SPI.setDataMode(SPI_MODE2);           // The AD8113 runs in SPI-mode 2
-
+  
   SYNC_PORT |= B01000000;               // Load the shift register
 
   for (i = 0; i < XBAR_CONF_BYTES; i++) {
@@ -501,7 +499,7 @@ void sample_elements() {
                         // sure here that we have reached OP_MODE already.
 
   for (int i = 0; i < ro_group_size; i++) { // Read all elements defined in the readout-group
-    samples[no_of_samples++] = read_adc(ro_group[i]);
+    samples[no_of_samples++] = read_adc(ro_group[i], READ_DELAY);
 #ifdef DEBUG
     Serial.print(String(no_of_samples) + ": " + String(samples[no_of_samples - 1]) + " ");
 #endif
@@ -670,7 +668,7 @@ void loop() {
       }
       else if ((EXT_HALT_PORT & EXT_HALT_BIT) && enable_ext_halt) {
         halt();
-        if (state == STATE_SINGLE_RUN_OP && sync_mode)  // TODO: Shouldn't this apply in every OP-mode variant?
+        if (state == STATE_SINGLE_RUN_OP && sync_mode)
           Serial.print("EOSRHLT\n");
         state = STATE_NORMAL;
       }
@@ -776,7 +774,7 @@ void loop() {
         case 'f': // Fetch values for all elements defined in a readout group
           noInterrupts();
           for (int i = 0; i < ro_group_size; i++) // 1st, we read all elements to minimize jitter
-            ro_group_values[i] = convert_adc2float(read_adc(ro_group[i]));
+            ro_group_values[i] = convert_adc2float(read_adc(ro_group[i], READ_DELAY));
 
           for (int i = 0; i < ro_group_size; i++) { // 2nd, we output the values
             dtostrf(ro_group_values[i], 4, 4, buffer);
@@ -801,7 +799,7 @@ void loop() {
         case 'g': // Set address of a computing element and return its ID and associated value, format: g\x{4}
           input[Serial.readBytesUntil('\n', input, 4)] = 0;
           address = strtol(input, 0, 16);
-          result = convert_adc2float(read_adc(address));
+          result = convert_adc2float(read_adc(address, READ_DELAY));
           dtostrf(result, 4, 4, buffer);
           Serial.print(buffer);
           Serial.print(" " + String(module_id) + "\n");
