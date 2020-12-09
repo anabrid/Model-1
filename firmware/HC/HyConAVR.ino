@@ -1,39 +1,7 @@
 /*
-    Simple hybrid interface to the Analogparadigm Model-1 analog computer.
-*/
-
-/*
- ANABRID_BEGIN_LICENSE:GPL
- Commercial License Usage
- Licensees holding valid commercial anabrid licenses may use this file in
- accordance with the commercial license agreement provided with the
- Software or, alternatively, in accordance with the terms contained in
- a written agreement between you and Anabrid GmbH. For licensing terms
- and conditions see https://www.anabrid.com/licensing. For further
- information use the contact form at https://www.anabrid.com/contact.
- 
- GNU General Public License Usage
- Alternatively, this file may be used under the terms of the GNU 
- General Public License version 3 as published by the Free Software
- Foundation and appearing in the file LICENSE.GPL3 included in the
- packaging of this file. Please review the following information to
- ensure the GNU General Public License version 3 requirements
- will be met: https://www.gnu.org/licenses/gpl-3.0.html.
- ANABRID_END_LICENSE
-*/
-
-/*
-   All timing related issues are done with a polling state machine instead
-   of a more or less elaborate interrupt scheme (which was implemented first
-   but yielded problems with "lost" OP-cycles etc. under certain (nasty)
-   conditions). Accordingly, one should be aware that serial line input/output
-   may cause some clock-skew in this implementation but this should not
-   be a problem as most output consists of only a few bytes.
-
-   The same holds true for the two external halt conditions (overflow
-   and the EXT-HALT-input).
-   Be careful not to issue c/C (set OP/IC time) or d/D (switch digital
-   output on or off) commands during a single or repetitive run as these commands
+    Simple hybrid interface to the Analogparadigm Model-1 analog computer. 
+    The same holds true for the two external halt conditions (overflow and the EXT-HALT-input).
+    Be careful not to issue c/C (set OP/IC time) or d/D (switch digital output on or off) commands during a single or repetitive run as these commands
    use blocking IO to wait for their respective argument!
 
    04-AUG-2016  B. Ulmann   Begin implementation
@@ -76,6 +44,7 @@
    27-APR-2020  B. Ulmann   PS-card got an ECO changing its address from $000x to $00Fx to avoid collision with the card in slot 0.
    17-MAY-2020  B. Ulmann   USB interface set to 1 MBit/s - and back, as not being reliable on the Mac.
    08-DEC-2020  B. Ulmann   Rewrote read_adc(...) using Karl-Heinz SPI-implementation as the basis, added init_adc(...).
+   09-DEC-2020  B. Ulmann   Some minor cleanups and added comments.
 */
 
 /* Port mapping:
@@ -120,8 +89,6 @@
 # define TRUE !FALSE
 #endif
 
-#define MIN_SKEW      1           // Changes the behaviour of readout-groups to less jitter
-
 #define PORTC_DEFAULT B00000000   // Default state of PORTC (digital outputs on front panel)
 #define PORTE_DEFAULT B11011111   // Default state of PORTE (control pins etc.)
 #define PORTG_DEFAULT B00001110   // /CS_ADC = 1, /READ = 1, /WRITE = 1, CNV = 0
@@ -160,7 +127,6 @@
 #define MAX_DPT_MODULES 16                      // A system may accomodate (arbitrarily chosen) up to 16 modules containing digital potentiometers
 #define INPUT_BUFF_LEN  MAX_GROUP_SIZE * 5 + 4  // Length of the input buffer for all numeric values
 #define READ_DELAY      4                       // Delay for readout of module ids (in microseconds)
-#define ADC_CONVERSION_DELAY 4                  // Delay for an ADC conversion to complete (in microseconds)
 #define MAX_SAMPLES     1152                    // Number of 16 bit values usable for logging purposes
 #define CONTINGENCY_SAMPLES 128                 // This is subtracted from MAX_SAMPLES to avoid problems due to small timer inaccuracies
 #define MIN_SAMPLE_INT  50                      // Minimum duration of a sample interval in microseconds
@@ -171,8 +137,8 @@
 
 #define M_UNIT_POS_ADDR 0x00F0                  // Address to read out the positive machine unit
 #define M_UNIT_NEG_ADDR 0x00F1                  // Address to read out the negative machine unit
-#define M_UNIT_POS_ADDR_OLD 0x0000              // Old addresses to remain compatible with older customer machines
-#define M_UNIT_NEG_ADDR_OLD 0x0001
+#define M_UNIT_POS_ADDR_OLD 0x0000              // Old addresses to remain compatible with older customer machines - for positive
+#define M_UNIT_NEG_ADDR_OLD 0x0001              // and negative reference voltages
 
 // Operating modes of the analog computer
 #define MODE_IC     0
@@ -194,6 +160,9 @@
 #define SINGLE_RUN      0
 #define REPETITIVE_RUN  1
 
+//***************************************************************************************
+// Global variables
+//***************************************************************************************
 struct DPT_MODULE {  // Each module containing DPTs is associated with one of these structures.
   unsigned int number_of_potentiometers, address, module_id, values[PT_DPT24];
 };
@@ -211,8 +180,25 @@ volatile int16_t no_of_samples = 0,                 // Index of last sample, vol
                  state = STATE_NORMAL;              // The state machine is setup for external control
 struct DPT_MODULE dpt_modules[MAX_DPT_MODULES];     // Each module containins DPTs is represented by one entry of this array
 
-SPISettings SPI_ADC(20000000, MSBFIRST, SPI_MODE3); // Set SPI-mode and speed
-
+//***************************************************************************************
+//  setup() is called once during startup of the HC module and initializes the various
+// components of the system:
+//
+// - Set the baudrate of the USB interface.
+// - Scan the bus for modules such as the HC and DPT24 containing digital potentiometers.
+//   Each such interface is associated with a global data structure holding the current
+//   configuration bits for the digital potentiometers of this module.
+// - Send the Soft Span configuration word to the ADC on the HC board which is done by
+//   calling init_adc().
+// - Scan the bus for the PS module (this is searched for at the old standard addresses
+//   0x0000/0x0001 as well as at the new address 0x00f0/0x00f1 - the new address is used
+//   in all systems with a SYSBUS v. 1.4 while previous systems use the old addresses).
+//   The two machine units are then read out and the associated 16 bit values stored in 
+//   two global variables machine_unit_pos and machine_unit_neg. These values are used
+//   in the routine convert_adc2float(...).
+// - Initialize Timer3 and Timer5 which are used to control OP time and sampling 
+//   intervals.
+//***************************************************************************************
 void setup() { // Setup interfaces
   int i;
   char buffer[10];            // General purpose buffer, required to read adc to get module_ids
@@ -234,7 +220,7 @@ void setup() { // Setup interfaces
   SYNC_PORT |= B01000000;     // Deactivate SYNC for the digital potentiometers
   RW_PORT = B00001110;        // N/A, SYNC = 0, N/A, CNV = 0, /WRITE = 1, /READ = 1, /CSADC = 1, N/A
 
-  halt();
+  halt();                     // Switch on the HALT-LED to show that the bus scan is running...
 
   // Scan the bus to determine the address of the hybrid controller and the addresses of all optional
   // DPT24 modules. These addresses are required to initialize the digital potentiometers of these
@@ -248,7 +234,7 @@ void setup() { // Setup interfaces
         unsigned int address = (rack << 12) | (chassis << 8) | (module << 4);
         write_address(address);                   // Address the requested computing element
         PORTG &= B11111011;                       // Set the busline /READ = 0
-        delayMicroseconds(ADC_CONVERSION_DELAY);  // This is necessary to allow the buslines to settle - otherwise spurious module ids will be read
+        delayMicroseconds(READ_DELAY);            // This is necessary to allow the buslines to settle - otherwise spurious module ids will be read
         module_id = DBUS_IN;                      // Remember the ID of the module just read out - this is ugly since module_id is global... *sigh*
 
         if (module_id == MODULE_ID_HC)                      // This is the HC's slot
@@ -276,11 +262,10 @@ void setup() { // Setup interfaces
     }
   }
 
-  ic();
+  ic();                                           // Bus scan complete, switch to initial condition
   clear_err_led();
 
   init_adc();                                     // Send Soft Span configuration word, this is absolutely necessary for the ADC to work correctly!
-  read_adc(M_UNIT_POS_ADDR);                      // Perform one dummy read - this is necessary only for some (?!) of the LTC2357 chips...
 
   delayMicroseconds(1000);                        // Since these two values are of utmost importance, make sure everything is settled
   machine_unit_pos = read_adc(M_UNIT_POS_ADDR_OLD);
@@ -312,6 +297,25 @@ void setup() { // Setup interfaces
   Timer3.attachInterrupt(stop_single_run);
 }
 
+//***************************************************************************************
+//  The following function must be called once for each DPT-module in order to 
+// initialize it and its corresponding datastructure properly.
+//***************************************************************************************
+void initialize_dpts(struct DPT_MODULE *data) {
+  int i;
+
+  for (i = 0; i < data->number_of_potentiometers; data->values[i++] = 0x1802);              // Set the builtin digital potentiometers to write-enabled
+  data2potentiometers(RAW, data->address, data->values, data->number_of_potentiometers);    // Transmit raw data to potentiometers
+
+  for (i = 0; i < data->number_of_potentiometers; data->values[i++] = 0);                   // Set all wiper positions to zero
+  data2potentiometers(COOKED, data->address, data->values, data->number_of_potentiometers); // Transmit wiper position data to potentiometers
+}
+
+//***************************************************************************************
+//  init_adc() initializes the LTC2357 analog digital converter by sending an apropriate
+// Soft Span configuration word with explicit bit banging. This routine must be called
+// once before using the ADC. It is normally called from within setup().
+//***************************************************************************************
 int16_t init_adc() {                        // Initiate a conversion and readout the result from the ADC (LTC2357)
   uint32_t result;                          // This will hold one result value with the lower 24 bits containing the actual bits read
   int16_t value,                            // Actual value read from the 16 bit ADC
@@ -319,7 +323,6 @@ int16_t init_adc() {                        // Initiate a conversion and readout
 
   RW_PORT |= B00010000;                     // Toggle CNV: First, set CNV = 1, this is independent from /CS
   RW_PORT &= B11101111;                     // Reset CNV - these two successive port manipulations yield a high-time of 120 ns on the Mega2650-CORE
-  delayMicroseconds(ADC_CONVERSION_DELAY);  // Wait for the ADC to complete its conversion since we don't monitor BUSY
   PORTB   |= B00000010;                     // SCLK = 1
   RW_PORT &= B11111101;                     // Set /CS to low, thus enabling the ADC's serial line interface
   adccfg = 0x70;                            // ADCCONFIG word sets number of channels and SOFTSPAN word
@@ -336,31 +339,43 @@ int16_t init_adc() {                        // Initiate a conversion and readout
     PORTB &= B11111101;                     // Toggle SCLK: SCLK = 0
     PORTB |= B00000010;                     // ...and SCLK = 1
   }
+  
+  read_adc(M_UNIT_POS_ADDR);                // Perform one dummy read - this is necessary only for some (?!) of the LTC2357 chips...
 }
 
+//***************************************************************************************
+//  read_adc(...) reads the output voltage of a computing element at a given address.
+// Before using this routine, init_adc() must have been called one (which is done in 
+// setup()). 
+//  This routine returns a 16 bit integer value which can be converted to a single 
+// precision floating point number by calling convert_adc2float(...) subsequently.
+//  This routine also sets the global variable module_id to the ID value returned by 
+// the element addressed on the data bus. Only the lower 7 bits of the module ID read
+// are returned.
+//***************************************************************************************
 int16_t read_adc(unsigned int address) {
   uint8_t rx0, rx1, rx2;
+  SPISettings SPI_ADC(20000000, MSBFIRST, SPI_MODE3); // Set SPI-mode and speed
 
-  write_address(address);                   // Address the requested computing element
-  RW_PORT = B00001010;                      // Activate /READ
+  write_address(address);                             // Address the requested computing element
+  RW_PORT = B00001010;                                // Activate /READ
   delayMicroseconds(READ_DELAY);
-  module_id = DBUS_IN & 0x7f;               // Remember the ID of the module just read out - this is ugly since module_id is global... *sigh*
-  RW_PORT |= B00010000;                     // Toggle CNV: First, set CNV = 1, this is independent from /CS
-  RW_PORT &= B11101111;                     // Reset CNV - these two successive port manipulations yield a high-time of 120 ns on the Mega2650-CORE
+  module_id = DBUS_IN & 0x7f;                         // Remember the ID of the module just read out - this is ugly since module_id is global... *sigh*
+  RW_PORT |= B00010000;                               // Toggle CNV: First, set CNV = 1, this is independent from /CS
+  RW_PORT &= B11101111;                               // Reset CNV - these two successive port manipulations yield a high-time of 120 ns on the Mega2650-CORE
 
-  RW_PORT &= B11111101;                     // Set /CS to low, thus enabling the ADC's serial line interface
-  delayMicroseconds(ADC_CONVERSION_DELAY);  // Wait for the ADC to complete its conversion since we don't monitor BUSY
-  PORTG |= B00000100;                       // Deactivate bus line: /READ = 1
+  RW_PORT &= B11111101;                               // Set /CS to low, thus enabling the ADC's serial line interface
+  PORTG |= B00000100;                                 // Deactivate bus line: /READ = 1
 
   SPI.beginTransaction(SPI_ADC);
-  rx0 = SPI.transfer(0);
-  rx1 = SPI.transfer(0x70);
-  rx2 = SPI.transfer(0);
+  rx0 = SPI.transfer(0);                              // Read three single bytes (only the first two contain the actual data,
+  rx1 = SPI.transfer(0x70);                           // the third one contains the Soft Span word which is checked
+  rx2 = SPI.transfer(0);                              // just to be sure everything worked OK).
   SPI.end();
 #ifdef DEBUG
   Serial.print("Result = "); Serial.print(rx0, HEX); Serial.print(" "); Serial.print(rx1, HEX); Serial.print(" "); Serial.print(rx2, HEX); Serial.print("\n");  
 #endif
-  RW_PORT = B00000010;                      // Set /CS to high
+  RW_PORT |= B00000010;                               // Set /CS to high
 
   if (rx2 != 0x7) {
     Serial.print("ERROR: Illegal value read from ADC! ");
@@ -368,9 +383,14 @@ int16_t read_adc(unsigned int address) {
     Serial.print("\n");
   }
 
-  return (rx0 << 8) | rx1;
+  return (rx0 << 8) | rx1;                            // Combine high and low byte of the result
 }
 
+//***************************************************************************************
+//  convert_adc2float(...) converts a 16 bit value read from the ADC to a single precision
+// floating point number. Therefore the basis values of the positive and negative machine
+// units are required which were already read out during setup().
+//***************************************************************************************
 float convert_adc2float(int16_t value) {
   float result;
 
@@ -382,20 +402,28 @@ float convert_adc2float(int16_t value) {
   return result;
 }
 
+//***************************************************************************************
+//  write_address(...) writes a 16 bit address to the address bus thus selecting one 
+// computing element for a further operation.
+//***************************************************************************************
 void write_address(unsigned int address) {  // Set the 16 address lines to the address of the computing element to be selected
   PORTA = address & 0xff;                   // Output the eight low bits of the address
   PORTH = (address >> 8) & 0xff;            // Output the upper eight bits
 }
 
-/*
-  Send data (16 bit per potentiometer) to daisy-chained potentiometers.
-  Parameters:
-    mode:         RAW    = transmit data as is, used for mode setup etc.
-                  COOKED = transmit wiper data
-    address:      Address of the DPT module on the bus. The local DPTs must be addressed using the HC's own address
-    data[]:       Array holding the data for all daisy-chained potentiometers of board being addressed
-    number_of_pt: Number of entries in the aforementioned array
-*/
+//***************************************************************************************
+//  data2potentiometers(...) sends data (16 bit per potentiometer) to daisy-chained 
+// potentiometers like those contained on the HC and DPT24 modules.
+//
+//  Parameters:
+//    mode:         RAW    = transmit data as is, used for mode setup etc.
+//                  COOKED = transmit wiper data
+//    address:      Address of the DPT module on the bus. The local DPTs must be 
+//                  addressed using the HC's own address
+//    data[]:       Array holding the data for all daisy-chained potentiometers of 
+//                  board being addressed
+//    number_of_pt: Number of entries in the aforementioned array
+//***************************************************************************************
 void data2potentiometers(int mode, unsigned int address, unsigned int data[], unsigned int number_of_pt) {
   int i;
   unsigned char high, low;
@@ -432,7 +460,11 @@ void data2potentiometers(int mode, unsigned int address, unsigned int data[], un
   deassert_rw();          // Deassert /WRITE
 }
 
-void data2xbar(unsigned int address, unsigned char *data) {
+//***************************************************************************************
+//  data2xbar(...) sends a configuration bit stream to the XBAR module at the address
+// specified in the first parameter.
+//***************************************************************************************
+  void data2xbar(unsigned int address, unsigned char *data) {
   int i;
 
   write_address(address & 0xfff0);      // Address the potentiometer group - the four lowest address bits don't matter
@@ -454,31 +486,19 @@ void data2xbar(unsigned int address, unsigned char *data) {
   deassert_rw();                        // Deassert /WRITE
 }
 
-/*
-    The following function must be called once for each DPT-module in order to initialize it and its
-   corresponding datastructure properly.
-*/
-void initialize_dpts(struct DPT_MODULE *data) {
-  int i;
-
-  for (i = 0; i < data->number_of_potentiometers; data->values[i++] = 0x1802);              // Set the builtin digital potentiometers to write-enabled
-  data2potentiometers(RAW, data->address, data->values, data->number_of_potentiometers);    // Transmit raw data to potentiometers
-
-  for (i = 0; i < data->number_of_potentiometers; data->values[i++] = 0);                   // Set all wiper positions to zero
-  data2potentiometers(COOKED, data->address, data->values, data->number_of_potentiometers); // Transmit wiper position data to potentiometers
-}
-
-/*
-    This routine samples data from all computing elements defined in the current readout-group.
-   It is called by a Timer1-interrupt at regular intervals. The data is then output by the 'l' command.
-*/
+//***************************************************************************************
+//  sample_elements() samples data from all computing elements defined in the current 
+// readout-group.
+//  It is called by a Timer1-interrupt at regular intervals. The data can then be sent
+// to the attached digital computer by the 'l' command.
+//***************************************************************************************
 void sample_elements() {
   int i;
   uint32_t value;
 
-  if (mode != MODE_OP) // Reading micros() at the beginning of op() takes too much time
-    return;            // Enabling the timer in op() would be to slow, too, so let's make
-  // sure here that we have reached OP_MODE already.
+  if (mode != MODE_OP)  // Reading micros() at the beginning of op() takes too much time
+    return;             // Enabling the timer in op() would be to slow, too, so let's make
+                        // sure here that we have reached OP_MODE already.
 
   for (int i = 0; i < ro_group_size; i++) { // Read all elements defined in the readout-group
     samples[no_of_samples++] = read_adc(ro_group[i]);
@@ -495,37 +515,58 @@ void sample_elements() {
 #endif
 }
 
-void ic() { // Set analog computer to initial condition
+//***************************************************************************************
+// ic() switches the analog computer into initial condition mode.
+//***************************************************************************************
+void ic() {
   op_end = micros();
   PORTE = PORTE_IC;
   mode = MODE_IC;
 }
 
-void op() { // Set analog computer to operate
+//***************************************************************************************
+// op() switches the analog computer into operate mode.
+//***************************************************************************************
+void op() {
   op_start = micros();  // Remember start time to compute delta-t later
   PORTE = PORTE_OP;
   mode = MODE_OP;
 }
 
-void halt() { // Set analog computer to halt
+//***************************************************************************************
+// halt() switches the analog computer into halt mode.
+//***************************************************************************************
+void halt() {
   op_end = micros();
   PORTE = PORTE_HALT;
   mode = MODE_HALT;
 }
 
-void ps() { // Set analog computer to POTSET
+//***************************************************************************************
+// ps() switches the analog computer into potentiometer set mode.
+//***************************************************************************************
+void ps() {
   PORTE = PORTE_POTSET;
   mode = MODE_POTSET;
 }
 
-void set_err_led() {  // Switch on the error-LED
+//***************************************************************************************
+// set_err_led() switches the error LED on.
+//***************************************************************************************
+void set_err_led() {
   PORTE &= B01111111;
 }
 
-void clear_err_led() { // Turn off the error-LED
+//***************************************************************************************
+// clear_err_led() switches the error LED off.
+//***************************************************************************************
+void clear_err_led() {
   PORTE |= B10000000;
 }
 
+//***************************************************************************************
+// clear_digital_output() clears a specific digital output line (0 to 7).
+//***************************************************************************************
 void clear_digital_output(unsigned int value) { // Clear a digital output line
   if (value > 7) {
     set_err_led();
@@ -534,6 +575,9 @@ void clear_digital_output(unsigned int value) { // Clear a digital output line
     D_OUT &= ~(1 << value) & 0xff;
 }
 
+//***************************************************************************************
+// set_digital_output() sets a specific digital output line (0 to 7).
+//***************************************************************************************
 void set_digital_output(unsigned int value) {   // Set a digital output line
   if (value > 7) {
     set_err_led();
@@ -542,23 +586,33 @@ void set_digital_output(unsigned int value) {   // Set a digital output line
     D_OUT |= 1 << value;
 }
 
+//***************************************************************************************
+// assert_read() activates the /READ control line on the system bus.
+//***************************************************************************************
 void assert_read() {    // Activate /READ only
   deassert_rw();
   RW_PORT &= B11111011;
 }
 
+//***************************************************************************************
+// assert_write() activates the /WRITE control line on the system bus.
+//***************************************************************************************
 void assert_write() {   // Activate /WRITE only
   deassert_rw();
   RW_PORT &= B11110111;
 }
 
+//***************************************************************************************
+// deassert_rw() deactivates the /READ and /WRITE control lines on the system bus.
+//***************************************************************************************
 void deassert_rw() {
   RW_PORT |= B00001100; // Set /WRITE and /READ to 1 - the interlock logic then suppresses the signals altogether
 }
 
-/*
-   This routine is controlled by TimerThree and stops the OP-portion of a single-run.
-*/
+//***************************************************************************************
+//  stop_single_run() is controlled by TimerThree and stops the OP-portion of a 
+// single-run when its run time is over.
+//***************************************************************************************
 void stop_single_run() {
   static int first_call = TRUE;
 
@@ -584,9 +638,11 @@ void stop_single_run() {
   }
 }
 
-/*
-    Main loop - most of the logic is implemented here
-*/
+//***************************************************************************************
+//  loop() contains the main control logic of the HC module firmware. This is the place
+// where commands are read and interpreted and results are sent back to the attached 
+// digital computer.
+//***************************************************************************************
 void loop() {
   static int enable_ovl_halt = FALSE,           // Halt on overload is disabled by default
              enable_ext_halt = FALSE;           // as is halt on external input
@@ -719,7 +775,6 @@ void loop() {
           break;
         case 'f': // Fetch values for all elements defined in a readout group
           noInterrupts();
-#ifdef MIN_SKEW // This minimizes clock skew on readout
           for (int i = 0; i < ro_group_size; i++) // 1st, we read all elements to minimize jitter
             ro_group_values[i] = convert_adc2float(read_adc(ro_group[i]));
 
@@ -729,15 +784,6 @@ void loop() {
             if (i < ro_group_size - 1)
               Serial.print(";");
           }
-#else
-          for (int i = 0; i < ro_group_size; i++) {
-            result = convert_adc2float(read_adc(ro_group[i]));
-            dtostrf(result, 4, 4, buffer);
-            Serial.print(buffer);
-            if (i < ro_group_size - 1)
-              Serial.print(";");
-          }
-#endif
           Serial.print("\n");
           interrupts();
           break;
@@ -954,5 +1000,4 @@ OP-time=" + String(op_time / 1000) + ",RO-GROUP=");
     }
   }
 }
-
 
