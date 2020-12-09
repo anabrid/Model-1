@@ -180,8 +180,7 @@ volatile int16_t no_of_samples = 0,                 // Index of last sample, vol
                  samples[MAX_SAMPLES],              // Array for data logging
                  state = STATE_NORMAL;              // The state machine is setup for external control
 struct DPT_MODULE dpt_modules[MAX_DPT_MODULES];     // Each module containins DPTs is represented by one entry of this array
-SPISettings adc_spi(20000000, MSBFIRST, SPI_MODE3); // Set SPI-mode and speed for accessing the ADC
-SPISettings dpt_spi(8000000, MSBFIRST, SPI_MODE1);
+SPISettings adc_spi(10000000, MSBFIRST, SPI_MODE3); // Set SPI-mode and speed for accessing the ADC
 
 //***************************************************************************************
 //  setup() is called once during startup of the HC module and initializes the various
@@ -338,7 +337,8 @@ int16_t init_adc() {                        // Initiate a conversion and readout
     PORTB &= B11111101;                     // Toggle SCLK: SCLK = 0
     PORTB |= B00000010;                     // ...and SCLK = 1
   }
-  
+
+  read_adc(M_UNIT_POS_ADDR, READ_DELAY);    // Perform one dummy read - this is necessary only for some (?!) of the LTC2357 chips...
   read_adc(M_UNIT_POS_ADDR, READ_DELAY);    // Perform one dummy read - this is necessary only for some (?!) of the LTC2357 chips...
 }
 
@@ -356,14 +356,13 @@ int16_t read_adc(unsigned int address, unsigned int delay) {
   uint8_t rx0, rx1, rx2;
 
   write_address(address);                             // Address the requested computing element
-  assert_read();
-  delayMicroseconds(delay);
+  assert_read();                                      // Activate the /READ bus line
+  delayMicroseconds(delay);                           // Wait a moment for the signal on readout to settle (long bus line)
   module_id = DBUS_IN & 0x7f;                         // Remember the ID of the module just read out - this is ugly since module_id is global... *sigh*
   RW_PORT |= B00010000;                               // Toggle CNV: First, set CNV = 1, this is independent from /CS
   RW_PORT &= B11101111;                               // Reset CNV - these two successive port manipulations yield a high-time of 120 ns on the Mega2650-CORE
-
   RW_PORT &= B11111101;                               // Set /CS to low, thus enabling the ADC's serial line interface
-  deassert_rw();
+  delayMicroseconds(2);                               // TODO: This is required only on one of the HCs known today. Does this HC has a too slowly falling /CS edge?
 
   SPI.beginTransaction(adc_spi);
   rx0 = SPI.transfer(0);                              // Read three single bytes (only the first two contain the actual data,
@@ -374,8 +373,9 @@ int16_t read_adc(unsigned int address, unsigned int delay) {
   Serial.print("Result = "); Serial.print(rx0, HEX); Serial.print(" "); Serial.print(rx1, HEX); Serial.print(" "); Serial.print(rx2, HEX); Serial.print("\n");  
 #endif
   RW_PORT |= B00000010;                               // Set /CS to high
+  deassert_rw();                                      // Deactivate /READ, thus releasing the bus again
 
-  if (rx2 != 0x7) {
+  if (rx2 != 0x7) {                                   // The third word must contain the Soft Span configuration word which is 0x7 in our case, just be paranoid
     Serial.print("ERROR: Illegal value read from ADC! ");
     Serial.print("Result = "); Serial.print(rx0, HEX); Serial.print(" "); Serial.print(rx1, HEX); Serial.print(" "); Serial.print(rx2, HEX); Serial.print("\n");  
     Serial.print("\n");
