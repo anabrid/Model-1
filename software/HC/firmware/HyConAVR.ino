@@ -327,6 +327,7 @@ int16_t init_adc() {                        // Initiate a conversion and readout
   PORTB &= B11111011;                       // Clear MOSI first
 
   for (int i = 24; i > 0; i--) {            // Read and write 24 bits all in all
+
     if (adccfg & 0x8000)
       PORTB |= B00000100;                   // Set MOSI according to the ADCCONFIG word
     else
