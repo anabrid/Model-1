@@ -4,7 +4,7 @@ This repository contains Firmware, tools, and documentation for the [Analog Para
 ## Other places to look for
 
 * Check out http://analogparadigm.com/documentation.html, it contains handbooks and various application notes
-* The Perl5 Reference implementation of the Hybrid Controller serial port client can be found at https://metacpan.org/pod/release/VAXMAN/IO-HyCon-1.3/lib/IO/HyCon.pm
+* The Perl5 Reference implementation of the Hybrid Controller serial port client can be found at https://metacpan.org/pod/release/VAXMAN/IO-HyCon-1.3/lib/IO/HyCon.pm but also [`/software/HC/Perl/IO-HyCon`](software/HC/Perl/IO-HyCon)
 * The Python3 implementation of this particular client can be found at https://github.com/anabrid/pyanalog
 
 ## Licensing
