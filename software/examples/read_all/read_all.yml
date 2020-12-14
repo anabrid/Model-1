@@ -1,0 +1,59 @@
+#
+#  This configuration file is taylored for Serial no. 108 with the 
+# following complement of computing elements:
+#
+# Chassis 0 (top):    PS, HC, PT8, INT4
+# Chassis 1 (bottom): XIBNC, MLT8, SUM8, INT4
+#
+serial:
+    port: /dev/cu.usbserial-DN050L1P
+    bits: 8
+    baud: 250000
+    parity: none
+    stopbits: 1
+    poll_interval: 10
+    poll_attempts: 20000
+types:
+    0: PS
+    1: SUM8
+    2: INT4
+    3: PT8
+    4: CU
+    5: MLT8
+    6: MDS2
+    7: CMP4
+    8: HC
+manual_potentiometers: 
+elements: 
+    PT0: 0x0020
+    PT1: 0x0021
+    PT2: 0x0022
+    PT3: 0x0023
+    PT4: 0x0024
+    PT5: 0x0025
+    PT6: 0x0026
+    PT7: 0x0027
+    INT0-0: 0x0060
+    INT0-1: 0x0061
+    INT0-2: 0x0062
+    INT0-3: 0x0063
+    MLT0: 0x0100
+    MLT1: 0x0101
+    MLT2: 0x0102
+    MLT3: 0x0103
+    MLT4: 0x0104
+    MLT5: 0x0105
+    MLT6: 0x0106
+    MLT7: 0x0107
+    SUM0: 0x0120
+    SUM1: 0x0121
+    SUM2: 0x0122
+    SUM3: 0x0123
+    SUM4: 0x0124
+    SUM5: 0x0125
+    SUM6: 0x0126
+    SUM7: 0x0127
+    INT1-0: 0x0160
+    INT1-1: 0x0161
+    INT1-2: 0x0162
+    INT1-3: 0x0163
