@@ -45,6 +45,7 @@
    17-MAY-2020  B. Ulmann   USB interface set to 1 MBit/s - and back, as not being reliable on the Mac.
    08-DEC-2020  B. Ulmann   Rewrote read_adc(...) using Karl-Heinz SPI-implementation as the basis, added init_adc(...).
    09-DEC-2020  B. Ulmann   Some minor cleanups and added comments.
+   15-DEC-2020  B. Ulmann   E and F with OVL-Halt enabled and a previous overload only entered OP every second call! Fixed...
 */
 
 /* Port mapping:
@@ -78,7 +79,7 @@
 #undef DEBUG
 
 #define VERSION "v2.1"
-#define VERSION_DATE "20201208"
+#define VERSION_DATE "20201215"
 
 #include <SPI.h>
 #include <TimerThree.h>
@@ -619,7 +620,7 @@ void stop_single_run() {
     return;                   // which should be ignored.
 
 #ifdef DEBUG
-  Serial.print("F=" + String(first_call) + "\n");
+  Serial.print("F=" + String(first_call) + "\nState = " + String(state) + "\n");
 #endif
   if (first_call) // The routine is called twice - once at the beginning of a timer period and once at the end, only the last one is relevant
     first_call = FALSE;
@@ -663,7 +664,10 @@ void loop() {
     // Take care of halt conditions - this has to be done before any single/repetitive run logic!
     if (mode == MODE_OP) { // Either halt condition only has an effect if the current analog computer mode is OP
       if (!(OVL_PORT & OVL_BIT) && enable_ovl_halt) {
-        halt();
+        if (state == STATE_SINGLE_RUN_OP) 
+          stop_single_run();
+        else
+          halt();
         state = STATE_NORMAL;
         Serial.print("\tOverload halt!\n");
       }
@@ -679,7 +683,6 @@ void loop() {
     if (state == STATE_SINGLE_RUN_IC) {
       if (micros() - now >= ic_time) { // End of IC-period reached
         state = STATE_SINGLE_RUN_OP;
-        now = micros(); // Remember start of OP-period
 
         if (ro_group_size) { // Activate logging if a readout-group has been defined
           no_of_samples = 0;                            // Clear all data samples gathered previously
@@ -694,6 +697,7 @@ void loop() {
           Timer5.restart();
         }
 
+        now = micros(); // Remember start of OP-period
         op(); // This takes a tick :-) for reading out micros() to determine run time, so let's start the interrupt after calling it
         Timer3.initialize(op_time); // Prepare time to end the OP-interval
         Timer3.restart();
