@@ -17,12 +17,10 @@ use Data::Dumper;
 my $ac = IO::HyCon->new();
 $ac->setup();
 
-for my $a (0 .. 200) {
+for my $a (0 .. 10) {
     print "Running with a = $a...\n";
-    $ac->set_pt('a', $a / 200);
-    $ac->digital_output(0, 1);
-    $ac->digital_output(0, 0);
+    $ac->set_pt('a', $a / 10);
     $ac->single_run_sync(); # Run and collect data as defined in the ro-group
-#    $ac->get_data();
-#    $ac->plot();
+    $ac->get_data();
+    $ac->plot();
 }
