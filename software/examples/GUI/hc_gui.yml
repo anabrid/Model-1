@@ -16,6 +16,7 @@ types:
     6: MDS2
     7: CMP4
     8: HC
+    9: DPT24
 manual_potentiometers: 
 elements: 
     DPT0: 0000/0
