@@ -12,7 +12,6 @@ use strict;
 use warnings;
 
 use IO::HyCon;
-use Data::Dumper;
 
 my $ac = IO::HyCon->new();
 $ac->setup();
