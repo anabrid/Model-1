@@ -22,4 +22,5 @@ for my $a (0 .. 10) {
     $ac->single_run_sync(); # Run and collect data as defined in the ro-group
     $ac->get_data();
     $ac->plot();
+#    $ac->store_data(filename => "result_$a.dat");
 }
