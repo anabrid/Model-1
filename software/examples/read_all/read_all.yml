@@ -23,7 +23,7 @@ types:
     6: MDS2
     7: CMP4
     8: HC
-manual_potentiometers: 
+    9: DPT24
 elements: 
     PT0: 0x0020
     PT1: 0x0021
