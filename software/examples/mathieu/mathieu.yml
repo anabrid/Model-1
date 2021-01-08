@@ -8,7 +8,7 @@
 serial:
     port: /dev/cu.usbserial-DN050L1P
     bits: 8
-    baud: 250000
+    baud: 115200
     parity: none
     stopbits: 1
     poll_interval: 10
