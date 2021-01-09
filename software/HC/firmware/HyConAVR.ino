@@ -117,7 +117,7 @@
 #define COOKED  1
 
 // Various default values:
-#define BAUDRATE        250000                  // Baud rate, can be as high as 2 MBit/s but some LINUX distributions don't support this
+#define BAUDRATE        115200                  // Baud rate, can be as high as 2 MBit/s but some LINUX distributions don't support this
 #define MAX_GROUP_SIZE  100                     // Maximum number of addresses in a readout group
 #define TIMEOUT         10000                   // Timeout in ms for the serial line when reading an integer
 #define TIME_DIGITS     6                       // All times (IC/OP) will be specified with six digits (leading zeros)
