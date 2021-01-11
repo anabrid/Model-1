@@ -46,6 +46,7 @@
    08-DEC-2020  B. Ulmann   Rewrote read_adc(...) using Karl-Heinz SPI-implementation as the basis, added init_adc(...).
    09-DEC-2020  B. Ulmann   Some minor cleanups and added comments.
    15-DEC-2020  B. Ulmann   E and F with OVL-Halt enabled and a previous overload only entered OP every second call! Fixed...
+   11-JAN-2020  B. Ulmann   Included Karl-Heinz Dahlmanns 'I'-code to get information about the chassis population.
 */
 
 /* Port mapping:
@@ -89,6 +90,8 @@
 # define FALSE 0
 # define TRUE !FALSE
 #endif
+
+#define SHORT_STRING_LEN  10
 
 #define PORTC_DEFAULT B00000000   // Default state of PORTC (digital outputs on front panel)
 #define PORTE_DEFAULT B11011111   // Default state of PORTE (control pins etc.)
@@ -639,6 +642,118 @@ void stop_single_run() {
 }
 
 //***************************************************************************************
+//*  The following routines (written by Karl-Heinz Dahlmann) return the current system 
+//* configuration. 
+//***************************************************************************************
+struct moduleData {
+  String s;
+  byte b;
+};
+
+const struct moduleData modules[] = {
+// name, max. elements to read
+  { "PS   ", 4 },
+  { "SUM8 ", 8 },
+  { "INT4 ", 4 },
+  { "PT8  ", 8 },
+  { "CU   ", 2 },
+  { "MLT8 ", 8 },
+  { "MDS2 ", 2 },
+  { "CMP4 ", 4 },
+  { "HC   ", 0 },
+  { "DPT24", 24 },
+  { "XBAR ", 0 }
+};
+
+void exploreSystem(void) {
+  char input[SHORT_STRING_LEN];
+  int16_t address;
+  int i,sz,mcnt;
+
+  delay(2); // Wait a tad for the serial line if more characters are coming...
+  input[sz = 0] = (char) 0;
+  while (Serial.available() > 0)
+    input[sz++] = Serial.read();
+  input[sz] = (char) 0;
+
+  address = strtol(input, 0, 16);
+    
+  Serial.print("\nsystem info:\n");
+  if (input[sz-1]=='+') mcnt=exploreAll(address,sz-1,true);
+  else mcnt=exploreAll(address,sz,false);
+}
+
+int exploreAll(int16_t address, int sz, boolean rdval) {
+  int i,mcnt;
+  mcnt=0;
+  if (sz>=1) mcnt+=exploreRack(address<<((4-sz)*4),sz,rdval,true);
+  else {
+    for (i=0;i<5;i++) {
+      if (i==0) mcnt+=exploreRack(i<<12,sz,rdval,true);
+      else mcnt+=exploreRack(i<<12,sz,rdval,false);
+    }
+  }
+  return mcnt;
+}
+
+int exploreRack(int16_t address, int sz, boolean rdval, boolean firstRack) {
+  int i,j,mcnt;
+  String prbuff;
+  mcnt=0;
+  prbuff="------------------";
+  if (firstRack) Serial.println(prbuff);
+  if (sz>=2) {
+    j=exploreChassis(address,sz,rdval);
+    if (j>0) Serial.println(prbuff);
+    mcnt+=j;
+  }
+  else {
+    for (i=0;i<5;i++) {
+      j=exploreChassis(address+(i<<8),sz,rdval);
+      if (j>0) Serial.println(prbuff);
+      mcnt+=j;
+    }
+  }
+  return mcnt;
+}
+
+int exploreChassis(int16_t address, int sz, int rdval) {
+  float r;
+  int i,j,mcnt;
+  int16_t addr;
+  char addrprformat[10];
+  mcnt=0;
+  for (i=0;i<16;i++) {
+    addr=address+i*16;
+    if (sz>=3) addr=address;
+    read_adc(addr,0);
+    if (module_id<127) {
+      j=0;
+      do {
+        sprintf(addrprformat,"%04X",addr+j);
+        Serial.print(addrprformat);
+        if (module_id < sizeof(modules)/sizeof(moduleData)) Serial.print(" "+modules[module_id].s+" ");
+        else Serial.print(" ????? ");
+        if ((sz>=3||rdval) && (modules[module_id].b)>0) {
+          r=convert_adc2float(read_adc(addr+j,READ_DELAY));
+          dtostrf(r,4,4,addrprformat);
+          if (r>=0) Serial.print(" ");
+          Serial.println(addrprformat);
+        }
+        else {
+          Serial.println();
+          break;
+        }
+        j++;
+      } while (j<modules[module_id].b);
+      mcnt++;
+    }
+    if (sz==3) break;
+  }
+  return mcnt;
+}
+
+//***************************************************************************************
 //  loop() contains the main control logic of the HC module firmware. This is the place
 // where commands are read and interpreted and results are sent back to the attached 
 // digital computer.
@@ -814,6 +929,9 @@ void loop() {
           state = STATE_NORMAL;  // Make sure to kill any active single/repetitive run
           halt();
           break;
+        case 'I': // Get system information
+          exploreSystem();
+          break;
         case 'i': // Set analog computer to initial condition
           Serial.print("IC\n");
           state = STATE_NORMAL;  // Make sure to kill any active single/repetitive run
@@ -979,6 +1097,7 @@ OP-time=" + String(op_time / 1000) + ",RO-GROUP=");
   G\\w         Set addresses \\x;\\x. for group readout, '.' terminates the input\n\
   h           Halt\n\
   i           Initial condition\n\
+  I           Get information about the computer configuration, see documentation for parameters\n\
   l           Get data from last logging operation\n\
   L\\x{4}      Locate a computing element by its 4 digit address by turning on the read LED\n\
               An address of ffff will deassert read.\n\
@@ -1003,4 +1122,3 @@ OP-time=" + String(op_time / 1000) + ",RO-GROUP=");
     }
   }
 }
-
