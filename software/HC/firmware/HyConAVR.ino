@@ -46,7 +46,9 @@
    08-DEC-2020  B. Ulmann   Rewrote read_adc(...) using Karl-Heinz SPI-implementation as the basis, added init_adc(...).
    09-DEC-2020  B. Ulmann   Some minor cleanups and added comments.
    15-DEC-2020  B. Ulmann   E and F with OVL-Halt enabled and a previous overload only entered OP every second call! Fixed...
-   11-JAN-2020  B. Ulmann   Included Karl-Heinz Dahlmanns 'I'-code to get information about the chassis population.
+   11-JAN-2021  B. Ulmann   Included Karl-Heinz Dahlmanns 'I'-code to get information about the chassis population.
+   31-JAN-2021  B. Ulmann   Merged a change from K.H. Dahlmann (save memory in exploreChassis).
+   01-FEB-2021  B. Ulmann   Added K.H. Dahlmann's new 'T'-command.
 */
 
 /* Port mapping:
@@ -650,21 +652,6 @@ struct moduleData {
   byte b;
 };
 
-const struct moduleData modules[] = {
-// name, max. elements to read
-  { "PS   ", 4 },
-  { "SUM8 ", 8 },
-  { "INT4 ", 4 },
-  { "PT8  ", 8 },
-  { "CU   ", 2 },
-  { "MLT8 ", 8 },
-  { "MDS2 ", 2 },
-  { "CMP4 ", 4 },
-  { "HC   ", 0 },
-  { "DPT24", 24 },
-  { "XBAR ", 0 }
-};
-
 void exploreSystem(void) {
   char input[SHORT_STRING_LEN];
   int16_t address;
@@ -722,6 +709,22 @@ int exploreChassis(int16_t address, int sz, int rdval) {
   int i,j,mcnt;
   int16_t addr;
   char addrprformat[10];
+
+  const struct moduleData modules[] = {
+  // name, max. elements to read
+    { "PS   ", 4 },
+    { "SUM8 ", 8 },
+    { "INT4 ", 4 },
+    { "PT8  ", 8 },
+    { "CU   ", 2 },
+    { "MLT8 ", 8 },
+    { "MDS2 ", 2 },
+    { "CMP4 ", 4 },
+    { "HC   ", 0 },
+    { "DPT24", 24 },
+    { "XBAR ", 0 }
+  };
+
   mcnt=0;
   for (i=0;i<16;i++) {
     addr=address+i*16;
@@ -1060,6 +1063,32 @@ OP-time=" + String(op_time / 1000) + ",RO-GROUP=");
           else                      // We are no longer in OP-mode, use the stored end-time instead of current time
             Serial.print(String((op_end - op_start) / 1000));
           Serial.print("\n");
+          break;
+        case 'T': // Switch the analog computer to POTSET-mode
+          input[Serial.readBytesUntil('\n', input, 4)] = 0;
+          address = strtol(input, 0, 16);
+          Serial.print("Potset mode - change pot with 0-7, stop with any key\n");
+          state = STATE_NORMAL;  // Make sure to kill any active single/repetitive run
+          ps();
+          while(true) {
+            sprintf(buffer,"%04X",address);
+            Serial.print(buffer);
+            Serial.print("=>");
+            result = convert_adc2float(read_adc(address, READ_DELAY*10));
+            dtostrf(result, 4, 4, buffer);
+            Serial.println(buffer);
+            delay (500);
+            cmd=Serial.read();
+            if (cmd!=-1) {
+              if (cmd>='0' && cmd<'8') {
+                address&=0xFFF0;
+                address+=cmd-'0';
+              }
+              else break;
+            }
+          }
+          Serial.println("Potset stopped");
+          Serial.read();
           break;
         case 'x': // Reset hybrid controller
           setup();
