@@ -49,6 +49,8 @@
    11-JAN-2021  B. Ulmann   Included Karl-Heinz Dahlmanns 'I'-code to get information about the chassis population.
    31-JAN-2021  B. Ulmann   Merged a change from K.H. Dahlmann (save memory in exploreChassis).
    01-FEB-2021  B. Ulmann   Added K.H. Dahlmann's new 'T'-command.
+   19-FEB-2021  B. Ulmann   Added K.H. Dahlmann's modified 'T'-command code.
+   03-MAR-2021  B. Ulmann   'T' did not disable POTSET when finished (KHD found and fixed this).
 */
 
 /* Port mapping:
@@ -1067,10 +1069,10 @@ OP-time=" + String(op_time / 1000) + ",RO-GROUP=");
         case 'T': // Switch the analog computer to POTSET-mode
           input[Serial.readBytesUntil('\n', input, 4)] = 0;
           address = strtol(input, 0, 16);
-          Serial.print("Potset mode - change pot with 0-7, stop with any key\n");
+          if ((address&0x000F)<8) Serial.print("Potset mode - change pot with 0-7, stop with any key\n");
           state = STATE_NORMAL;  // Make sure to kill any active single/repetitive run
           ps();
-          while(true) {
+          while((address&0x000F)<8) {
             sprintf(buffer,"%04X",address);
             Serial.print(buffer);
             Serial.print("=>");
@@ -1084,11 +1086,25 @@ OP-time=" + String(op_time / 1000) + ",RO-GROUP=");
                 address&=0xFFF0;
                 address+=cmd-'0';
               }
-              else break;
+              else {
+                Serial.println("stopped");
+                break;
+              }
             }
           }
-          Serial.println("Potset stopped");
+          Serial.println("Potset values:");
+          address&=0xFFF0;
+          for (i=0;i<8;i++) {
+            sprintf(buffer,"%04X",address);
+            Serial.print(buffer);
+            Serial.print("=>");
+            result = convert_adc2float(read_adc(address, READ_DELAY*10));
+            dtostrf(result, 4, 4, buffer);
+            Serial.println(buffer);
+            address++;
+          }
           Serial.read();
+          halt();
           break;
         case 'x': // Reset hybrid controller
           setup();
